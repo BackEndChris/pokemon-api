@@ -1,61 +1,48 @@
-import os
-from dotenv import load_dotenv
-
 from datetime import datetime, timedelta, timezone
+import re
+
 from jose import jwt, JWTError
 from fastapi import HTTPException, Depends
 from fastapi.security import HTTPBearer, HTTPAuthorizationCredentials
+from sqlalchemy import text
 
-load_dotenv()
+from config import SECRET_KEY
+from database import engine
 
-SECRET_KEY = os.getenv("SECRET_KEY")
 ALGORITHM = "HS256"
 ACCESS_TOKEN_EXPIRE_MINUTES = 30
+security = HTTPBearer(auto_error=False)
 
-security = HTTPBearer()
+
+def unauthorized():
+    return HTTPException(401, "Invalid or expired authentication credentials", headers={"WWW-Authenticate": "Bearer"})
 
 
 def create_access_token(user_id: int):
-    expire = datetime.now(timezone.utc) + timedelta(
-        minutes=ACCESS_TOKEN_EXPIRE_MINUTES
-    )
+    expire = datetime.now(timezone.utc) + timedelta(minutes=ACCESS_TOKEN_EXPIRE_MINUTES)
+    return jwt.encode({"sub": str(user_id), "exp": expire}, SECRET_KEY, algorithm=ALGORITHM)
 
-    payload = {
-        "sub": str(user_id),
-        "exp": expire
-    }
-
-    return jwt.encode(
-        payload,
-        SECRET_KEY,
-        algorithm=ALGORITHM
-    )
 
 def decode_access_token(token: str):
     try:
-        payload = jwt.decode(
-            token,
-            SECRET_KEY,
-            algorithms=[ALGORITHM]
-        )
+        payload = jwt.decode(token, SECRET_KEY, algorithms=[ALGORITHM], options={"require_exp": True, "require_sub": True})
+        subject = payload.get("sub")
+        if not isinstance(subject, str) or not re.fullmatch(r"[1-9][0-9]{0,9}", subject):
+            raise unauthorized()
+        user_id = int(subject)
+        if user_id > 2147483647:
+            raise unauthorized()
+        return user_id
+    except (JWTError, ValueError, TypeError):
+        raise unauthorized() from None
 
-        user_id = payload.get("sub")
 
-        if user_id is None:
-            raise HTTPException(
-                status_code=401,
-                detail="Invalid token"
-            )
-
-        return int(user_id)
-
-    except JWTError:
-        raise HTTPException(
-            status_code=401,
-            detail="Invalid or expired token"
-        )
-
-def get_current_user_id(
-    credentials: HTTPAuthorizationCredentials = Depends(security)
-):
-    return decode_access_token(credentials.credentials)
+def get_current_user_id(credentials: HTTPAuthorizationCredentials | None = Depends(security)):
+    if credentials is None or credentials.scheme.lower() != "bearer":
+        raise unauthorized()
+    user_id = decode_access_token(credentials.credentials)
+    with engine.connect() as connection:
+        exists = connection.execute(text("SELECT id FROM users WHERE id = :id"), {"id": user_id}).scalar_one_or_none()
+    if exists is None:
+        raise unauthorized()
+    return user_id

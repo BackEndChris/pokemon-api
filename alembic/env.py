@@ -17,7 +17,7 @@ if DATABASE_URL is None:
 
 config.set_main_option(
     "sqlalchemy.url",
-    DATABASE_URL
+    DATABASE_URL.replace("%", "%%")
 )
 
 if config.config_file_name is not None:

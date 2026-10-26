@@ -7,6 +7,8 @@ from sqlalchemy import text
 
 from database import engine
 from moves import TYPE_MOVES
+import pytest
+from sqlalchemy.exc import IntegrityError
 
 
 def test_special_stats_migration_backfills_existing_pokemon():
@@ -48,6 +50,33 @@ def test_special_stats_migration_backfills_existing_pokemon():
 
                 migration.downgrade()
                 assert connection.execute(text("SELECT hp FROM pokemons ORDER BY type")).scalars().all() == [105, 90, 58]
+        finally:
+            transaction.rollback()
+
+
+def test_username_migration_blocks_conflicts_without_changing_accounts():
+    path = Path(__file__).resolve().parents[1] / "alembic/versions/a5910d2fb806_case_insensitive_usernames.py"
+    spec = importlib.util.spec_from_file_location("username_migration", path)
+    migration = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(migration)
+    with engine.connect() as connection:
+        transaction = connection.begin()
+        try:
+            connection.execute(text("CREATE TEMPORARY TABLE users (id INTEGER PRIMARY KEY, username TEXT) ON COMMIT DROP"))
+            connection.execute(text("INSERT INTO users VALUES (1,'Ash'),(2,'ash')"))
+            with Operations.context(MigrationContext.configure(connection)):
+                with pytest.raises(RuntimeError, match="conflicts"):
+                    migration.upgrade()
+                assert connection.execute(text("SELECT * FROM users ORDER BY id")).fetchall() == [(1, "Ash"), (2, "ash")]
+                # Simulate an explicit, operator-chosen rename, never an automatic merge.
+                connection.execute(text("UPDATE users SET username='misty' WHERE id=2"))
+                migration.upgrade()
+                with pytest.raises(IntegrityError):
+                    with connection.begin_nested():
+                        connection.execute(text("INSERT INTO users VALUES (3,'ASH')"))
+                assert connection.execute(text("SELECT count(*) FROM users")).scalar_one() == 2
+                migration.downgrade()
+                assert connection.execute(text("SELECT count(*) FROM users")).scalar_one() == 2
         finally:
             transaction.rollback()
 

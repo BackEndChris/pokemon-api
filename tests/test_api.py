@@ -6,7 +6,7 @@ from stats import TYPE_BASE_STATS
 from moves import TYPE_MOVES
 from database import engine
 from sqlalchemy import text
-from sqlalchemy.exc import NoResultFound
+from fastapi import HTTPException
 from pokemon_routes import save_pokemon_moves
 
 client = TestClient(app)
@@ -26,7 +26,7 @@ def test_register():
         json={
             "username": "testuser_pytest",
             "email": "testuser_pytest@example.com",
-            "password": "test123"
+            "password": "test12345"
         }
     )
 
@@ -44,7 +44,7 @@ def test_login():
         json={
             "username": "testuser",
             "email": "testuser@example.com",
-            "password": "test123"
+            "password": "test12345"
         }
     )
 
@@ -52,7 +52,7 @@ def test_login():
         "/login",
         json={
             "username": "testuser",
-            "password": "test123"
+            "password": "test12345"
         }
     )
 
@@ -69,7 +69,7 @@ def test_create_pokemon():
         json={
             "username": "testuser",
             "email": "testuser@example.com",
-            "password": "test123"
+            "password": "test12345"
         }
     )
 
@@ -77,7 +77,7 @@ def test_create_pokemon():
         "/login",
         json={
             "username": "testuser",
-            "password": "test123"
+            "password": "test12345"
         }
     )
 
@@ -127,9 +127,9 @@ def test_create_pokemon_without_token():
 @pytest.fixture
 def auth_headers():
     client.post("/register", json={
-        "username": "statsuser", "email": "stats@example.com", "password": "test123"
+        "username": "statsuser", "email": "stats@example.com", "password": "test12345"
     })
-    response = client.post("/login", json={"username": "statsuser", "password": "test123"})
+    response = client.post("/login", json={"username": "statsuser", "password": "test12345"})
     return {"Authorization": f"Bearer {response.json()['access_token']}"}
 
 
@@ -258,7 +258,8 @@ def test_saving_a_move_from_another_type_is_rejected(auth_headers):
     assert response.status_code == 200
     pokemon_id = response.json()["id"]
     with engine.begin() as connection:
-        with pytest.raises(NoResultFound):
+        with pytest.raises(HTTPException) as error:
             save_pokemon_moves(connection, pokemon_id, ["Ember"])
+        assert error.value.status_code == 503
     learned = client.get(f"/pokemon/{pokemon_id}").json()["moves"]
     assert [move["name"] for move in learned] == ["Water Gun"]
